@@ -84,7 +84,10 @@ pub fn load_word_neighbors() -> io::Result<usize> {
     let mut insert_query = String::from(" insert into d_neighs values");
 
     for i in 0..bitmasks.len() {
-        for j in 0..bitmasks.len() {
+        let self_map = format!("({}, {}),", bitmasks[i], bitmasks[i]);
+        insert_query.push_str(&self_map);
+        // solving through bit not set unions
+        for j in i..bitmasks.len() {
             if bitmasks[i] & bitmasks[j] == 0 {
                 let vals = format!("({}, {}),", bitmasks[i], bitmasks[j]);
                 insert_query.push_str(&vals);

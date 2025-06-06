@@ -1,18 +1,31 @@
 #![allow(dead_code)]
 use rusqlite;
 use std::time::Instant;
+use std::collections::HashMap;
 
 type RSqlConn = rusqlite::Connection;
 
-fn retrieve_neighs(bm:u32, pos:u32, conn:&RSqlConn) -> rusqlite::Result<Vec<u32>> {
-    let mut stmt = conn.prepare("select y from d_neighs where x = $1 and y > $2")?;
-    // let mut stmt = conn.prepare("select y from d_neighs where x = $1 and y > $2 order by y")?;
-    let neigh_iter = stmt.query_map([bm, pos], |row| {
-        row.get::<_,u32>(0)
-    })?;
-    Ok(
-        neigh_iter.collect::<rusqlite::Result<Vec<u32>>>()?
-    )
+// fn retrieve_neighs(bm:u32, pos:u32, conn:&RSqlConn) -> rusqlite::Result<Vec<u32>> {
+//     let mut stmt = conn.prepare("select y from d_neighs where x = $1 and y > $2")?;
+//     // let mut stmt = conn.prepare("select y from d_neighs where x = $1 and y > $2 order by y")?;
+//     let neigh_iter = stmt.query_map([bm, pos], |row| {
+//         row.get::<_,u32>(0)
+//     })?;
+//     Ok(
+//         neigh_iter.collect::<rusqlite::Result<Vec<u32>>>()?
+//     )
+// }
+
+fn retrieve_neighs(conn:&RSqlConn) -> HashMap<u32, Vec<u32>> {
+    let mut stmt = conn.prepare("select x, y from d_neighs").unwrap();
+    let mut map: HashMap<u32, Vec<u32>> = HashMap::new();
+    let mut rows = stmt.query([]).unwrap();
+    while let Some(row) = rows.next().unwrap() {
+        let x:u32 = row.get(0).unwrap();
+        let y:u32 = row.get(1).unwrap();
+        map.entry(x).or_default().push(y);
+    }
+    map
 }
 
 fn retrieve_neighs_cached(
@@ -22,6 +35,13 @@ fn retrieve_neighs_cached(
 ) -> rusqlite::Result<Vec<u32>> {
     let neigh_iter = stmt.query_map([bm, pos], |row| row.get(0))?;
     neigh_iter.collect()
+}
+
+fn filter_neighs(
+    bm:u32,
+    neighs: &HashMap<u32, Vec<u32>>
+) -> &Vec<u32> {
+    &neighs[&bm]
 }
 
 fn retrieve_bitmasks(conn:&RSqlConn) -> rusqlite::Result<Vec<u32>> {
@@ -63,7 +83,8 @@ fn search_backtrack(conn:&RSqlConn) -> Vec<Vec<u32>> {
     let mut found:Vec<Vec<u32>> = vec![];
     let words = retrieve_bitmasks(&conn).unwrap();
     let mut start = Instant::now(); 
-    let mut stmt = conn.prepare("select y from d_neighs where x = ?1 and y > ?2").unwrap();
+    let neighs =  retrieve_neighs(&conn);
+    // let mut stmt = conn.prepare("select y from d_neighs where x = ?1 and y > ?2").unwrap();
     for (pos, &b) in words.iter().enumerate() {
         if pos % 100 == 0 && pos > 0 {
             println!("Searching [{}:{}] took {:?}", pos - 100, pos, start.elapsed());
@@ -72,35 +93,49 @@ fn search_backtrack(conn:&RSqlConn) -> Vec<Vec<u32>> {
 
         let pos = pos as u32;
         // let mut available = retrieve_neighs(b, pos, conn).unwrap();
-        let mut available = retrieve_neighs_cached(b, pos as u32, &mut stmt).unwrap();
+        // let mut available = retrieve_neighs_cached(b, pos as u32, &mut stmt).unwrap();
         backtrack(
             pos,
             b,
+            b,
             &mut vec![b],
             &mut found, 
-            &mut available,
+            &neighs,
+            // &mut available,
             conn,
         )
     }
     found
 }
 
-fn backtrack(pos:u32, curr:u32, members:&mut Vec<u32>, found:&mut Vec<Vec<u32>>, available:&mut Vec<u32>, conn:&RSqlConn) {
+fn backtrack(
+    pos:u32,
+    bm:u32,
+    curr:u32,
+    members:&mut Vec<u32>,
+    found:&mut Vec<Vec<u32>>,
+    neighs:&HashMap<u32, Vec<u32>>,
+    // available:&mut Vec<u32>,
+    conn:&RSqlConn
+) {
     if members.len() == 5 {
         found.push(members.to_vec());
         return;
     }
 
-    for n in retrieve_neighs(curr, pos, conn).unwrap() {
+    // for n in retrieve_neighs(curr, pos, conn).unwrap() {
+    for &n in filter_neighs(curr, neighs ) {
         if n > curr && n & curr == 0 {
             members.push(n);
-            let mut intersection = sort_intersect(available, &mut retrieve_neighs(n, pos, conn).unwrap());
+            // let mut intersection = sort_intersect(available, &mut retrieve_neighs(n, pos, conn).unwrap());
             backtrack(
                 pos,
-                curr ^ n, 
+                bm ^ n, 
+                n,
                 members,
                 found,
-                &mut intersection,
+                neighs,
+                // &mut intersection,
                 conn
             );
             members.pop();
@@ -131,7 +166,14 @@ fn sort_intersect(base:&Vec<u32>, other:&Vec<u32>) -> Vec<u32> {
 fn main() {
     // use wordle::initialize;
     // let _ = initialize::create_data();
+
+
+    // let disk_conn = RSqlConn::open("dev.db")?;
+    // let mem_conn = RSqlConn::open_in_memory()?;
+    // disk_conn.backup(rusqlite::DatabaseName::Main, &mem_conn, None)?;
+    // // _ = find_collections(&mem_conn);
+
+
     let conn = RSqlConn::open("dev.db").unwrap();
     _ = find_collections(&conn);
-
 }
