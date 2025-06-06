@@ -68,7 +68,7 @@ pub fn load_word_database() -> io::Result<()> {
         }
     }
 
-    let create_query = " create table d_words (bitmask INTEGER, word TEXT); ";
+    let create_query = " create table if not exists d_words (bitmask INTEGER, word TEXT); ";
     let insert_query = " insert into d_words values (?, ?); ";
 
     match connection.execute(create_query) {
