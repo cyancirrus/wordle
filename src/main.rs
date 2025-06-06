@@ -1,4 +1,4 @@
-use sqlite;
+use rusqlite::{ Connection };
 use std::fs::File;
 use std::collections::BinaryHeap;
 use std::cmp::Ordering;
@@ -54,10 +54,8 @@ impl <T:Display> Display for WordHeapNode<T> {
 }
 
 pub fn load_word_database() -> io::Result<()> {
-    let mut success = 0;
-    let mut failure = 0;
     let file = File::open("words/five.txt")?;
-    let connection = sqlite::open("words.db").unwrap();
+    let connection = rusqlite::Connection::open("dev.db").unwrap();
     let mut dictionary:BinaryHeap<WordHeapNode<u32>> = BinaryHeap::new();
     let reader = BufReader::new(file);
     for line in reader.lines() {
@@ -68,33 +66,67 @@ pub fn load_word_database() -> io::Result<()> {
         }
     }
 
-    let create_query = " create table if not exists d_words (bitmask INTEGER, word TEXT); ";
-    let insert_query = " insert into d_words values (?, ?); ";
+    let create_query = " create table d_words (bitmask INTEGER, word TEXT PRIMARY_KEY); ";
+    let mut insert_query = String::from(" insert into d_words values");
+    let create_index = "create index idx_bitmask on d_words(bitmask); ";
 
-    match connection.execute(create_query) {
+    match connection.execute(create_query, ()) {
         Ok(tcreate) => println!("Successfully created db {:?}",tcreate),
         Err(e) => println!("Error cannot create db {:?}", e),
     }
-    
     while let Some(node) = dictionary.pop() {
-        let mut statement = {
-                connection.prepare(insert_query)
-                .unwrap()
-                .into_iter()
-                .bind((1, node.bitmask as i64 ))
-                .unwrap()
-                .bind((2, node.word.as_str()))
-                .unwrap()
-        };
+        let vals = format!("({}, '{}'),", node.bitmask, &node.word);
+        insert_query.push_str(&vals);
 
-        match statement.next() {
-            Some(Ok(_)) => success += 1,
-            _ => failure += 1,
-        }
     }
-    println!("Dimension words completed {{ success : {}, failures: {} }}", success,failure);
+    insert_query.pop();
+    insert_query.push_str(";");
+    match connection.execute( &insert_query[0..insert_query.len()-1], () ){
+        Ok(_) => println!("!! DimWords successfully created table inserted all words"),
+        Err(e) => println!("DimWords failed with error {:?}", e),
+    }
+    match connection.execute(create_index, ()) {
+        Ok(tcreate) => println!("Successfully created index {:?}", tcreate),
+        Err(e) => println!("Error for index {:?}", e),
+    }
+    // println!("{:?}", insert_query);
     Ok(())
 }
+
+pub fn load_word_neighbors() -> io::Result<usize> {
+    let connection = rusqlite::Connection::open("dev.db").unwrap();
+    let file = File::open("words/bits.bm")?;
+    let bitmasks: Vec<u32> = BufReader::new(file)
+        .lines()
+        .filter_map(Result::ok)
+        .filter_map(|line| line.trim().parse::<u32>().ok())
+        .collect()
+    ;
+    let create_query = " create table d_neighs (x INTEGER, y INTEGER); ";
+    let mut insert_query = String::from(" insert into d_neighs values");
+
+    for i in 0..bitmasks.len() {
+        for j in 0..bitmasks.len() {
+            if bitmasks[i] & bitmasks[j] == 0 {
+                let vals = format!("({}, {}),", bitmasks[i], bitmasks[j]);
+                insert_query.push_str(&vals);
+            }
+        }
+    }
+    insert_query.pop();
+    insert_query.push_str(";");
+    
+    match connection.execute(create_query, ()) {
+        Ok(_) => println!("Successfully created neighbors"),
+        Err(e) => println!("Error for create neighbors {:?}", e),
+    };
+    match connection.execute(&insert_query, ()) {
+        Ok(_) => println!("Successfully created neighbors"),
+        Err(e) => println!("Error for create neighbors {:?}", e),
+    }
+    Ok(0)
+}
+
 
 pub fn process_word_bank() -> io::Result<usize> {
     let mut word_count = 0;
@@ -146,6 +178,14 @@ fn main() {
         }
     }
     match load_word_database() {
+        Ok(_) => {
+            println!("Success! Loaded all words");
+        },
+        Err(e) => {
+            println!("Error found {:?}", e);
+        }
+    }
+    match load_word_neighbors() {
         Ok(_) => {
             println!("Success! Loaded all words");
         },
