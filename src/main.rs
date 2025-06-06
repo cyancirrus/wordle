@@ -1,12 +1,13 @@
+#![allow(dead_code)]
 use rusqlite;
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::time::Instant;
 
 type RSqlConn = rusqlite::Connection;
 
-fn retrieve_neighs(bm:u32, conn:&RSqlConn) -> rusqlite::Result<Vec<u32>> {
-    let mut stmt = conn.prepare("select y from d_neighs where x = $1 order by y")?;
-    let neigh_iter = stmt.query_map([bm], |row| {
+fn retrieve_neighs(bm:u32, pos:u32, conn:&RSqlConn) -> rusqlite::Result<Vec<u32>> {
+    let mut stmt = conn.prepare("select y from d_neighs where x = $1 and y > $2")?;
+    // let mut stmt = conn.prepare("select y from d_neighs where x = $1 and y > $2 order by y")?;
+    let neigh_iter = stmt.query_map([bm, pos], |row| {
         row.get::<_,u32>(0)
     })?;
     Ok(
@@ -14,8 +15,17 @@ fn retrieve_neighs(bm:u32, conn:&RSqlConn) -> rusqlite::Result<Vec<u32>> {
     )
 }
 
+fn retrieve_neighs_cached(
+    bm: u32,
+    pos: u32,
+    stmt: &mut rusqlite::Statement<'_>
+) -> rusqlite::Result<Vec<u32>> {
+    let neigh_iter = stmt.query_map([bm, pos], |row| row.get(0))?;
+    neigh_iter.collect()
+}
+
 fn retrieve_bitmasks(conn:&RSqlConn) -> rusqlite::Result<Vec<u32>> {
-    let mut stmt = conn.prepare("select bitmask from d_words")?;
+    let mut stmt = conn.prepare("select distinct bitmask from d_words")?;
     let word_iter = stmt.query_map([], |row| {
         row.get::<_,u32>(0)
     })?;
@@ -52,77 +62,71 @@ fn find_collections(conn:&RSqlConn) {
 fn search_backtrack(conn:&RSqlConn) -> Vec<Vec<u32>> {
     let mut found:Vec<Vec<u32>> = vec![];
     let words = retrieve_bitmasks(&conn).unwrap();
-    // let mut neigh_map: HashMap<u32, Vec<u32>> = HashMap::new();
-    let mut neigh_map: HashMap<u32, HashSet<u32>> = HashMap::new();
+    let mut start = Instant::now(); 
+    let mut stmt = conn.prepare("select y from d_neighs where x = ?1 and y > ?2").unwrap();
+    for (pos, &b) in words.iter().enumerate() {
+        if pos % 100 == 0 && pos > 0 {
+            println!("Searching [{}:{}] took {:?}", pos - 100, pos, start.elapsed());
+            start = Instant::now();
+        }
 
-    for b in &words {
-        // let neighs = retrieve_neighs(*b, conn).unwrap();
-        let neighs = retrieve_neighs(*b, conn).unwrap().into_iter().collect::<HashSet<_>>();
-        neigh_map.insert(*b, neighs);
-    }
-    for b in words {
-        println!("Searching {:?}", b);
-        let mut available = neigh_map[&b].clone();
+        let pos = pos as u32;
+        // let mut available = retrieve_neighs(b, pos, conn).unwrap();
+        let mut available = retrieve_neighs_cached(b, pos as u32, &mut stmt).unwrap();
         backtrack(
+            pos,
             b,
             &mut vec![b],
             &mut found, 
             &mut available,
-            &neigh_map,
+            conn,
         )
     }
     found
 }
 
-fn backtrack(
-    curr:u32,
-    members:&mut Vec<u32>,
-    found:&mut Vec<Vec<u32>>,
-    // available:&mut Vec<u32>,
-    available:&mut HashSet<u32>,
-    // neigh_map: &HashMap<u32, Vec<u32>>
-    neigh_map: &HashMap<u32, HashSet<u32>>
-) {
+fn backtrack(pos:u32, curr:u32, members:&mut Vec<u32>, found:&mut Vec<Vec<u32>>, available:&mut Vec<u32>, conn:&RSqlConn) {
     if members.len() == 5 {
         found.push(members.to_vec());
         return;
     }
-    for n in &neigh_map[&curr] {
-        if n & curr == 0 {
-            members.push(*n);
-            // let mut intersection = sort_intersect(available, &neigh_map[&n]);
-            let mut intersection = available.intersection(&neigh_map[&n]).cloned().collect::<HashSet<u32>>();
+
+    for n in retrieve_neighs(curr, pos, conn).unwrap() {
+        if n > curr && n & curr == 0 {
+            members.push(n);
+            let mut intersection = sort_intersect(available, &mut retrieve_neighs(n, pos, conn).unwrap());
             backtrack(
-                *n, 
+                pos,
+                curr ^ n, 
                 members,
                 found,
                 &mut intersection,
-               &neigh_map, 
+                conn
             );
             members.pop();
         }
     }
 }
 
-// fn sort_intersect(base:&Vec<u32>, other:&Vec<u32>) -> Vec<u32> {
-//     let mut i = 0;
-//     let mut j = 0;
-//     let mut inter = Vec::new();
-//     while i < base.len() && j < other.len(){
-//         let l = base[i];
-//         let r = other[j];
-//         if l == r {
-//             inter.push(base[i]);
-//             i+=1;
-//             j+=1;
-//         } else if l < r {
-//             i+=1;
-//         } else {
-//             j+=1;
-//         }
-//     }
-//     inter
-// }
+fn sort_intersect(base:&Vec<u32>, other:&Vec<u32>) -> Vec<u32> {
+    let mut i = 0;
+    let mut j = 0;
+    let mut inter = Vec::new();
+    while i < base.len() && j < other.len(){
+        let l = base[i];
+        let r = other[j];
+        if l == r {
+            inter.push(base[i]);
+            i+=1;
+            j+=1;
+        } else if l < r {
+            i+=1;
+        } else {
+            j+=1;
+        }
+    }
+    inter
+}
 
 fn main() {
     // use wordle::initialize;

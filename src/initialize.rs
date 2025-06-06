@@ -78,7 +78,9 @@ pub fn load_word_neighbors() -> io::Result<usize> {
         .collect()
     ;
     let create_query = " create table d_neighs (x INTEGER, y INTEGER); ";
-    let create_index = "create index idx_bitmask_neighs on d_neighs(x); ";
+    let create_index = "create index idx_x_y on d_neighs(x, y); ";
+    // let create_range= "create index idx_bitmask_neigh_range on d_neighs(y); ";
+    // let create_range= "create index idx_bitmask_neigh_range on d_neighs(y); ";
     let mut insert_query = String::from(" insert into d_neighs values");
 
     for i in 0..bitmasks.len() {
@@ -104,6 +106,14 @@ pub fn load_word_neighbors() -> io::Result<usize> {
         Ok(tcreate) => println!("!! DimNeighs successfully created index {:?}", tcreate),
         Err(e) => println!("DimNeighs Error for index {:?}", e),
     }
+    // match connection.execute(create_index, ()) {
+    //     Ok(tcreate) => println!("!! DimNeighs successfully created index {:?}", tcreate),
+    //     Err(e) => println!("DimNeighs Error for index {:?}", e),
+    // }
+    // match connection.execute(create_range, ()) {
+    //     Ok(tcreate) => println!("!! DimNeighs successfully created range {:?}", tcreate),
+    //     Err(e) => println!("DimNeighs Error for range {:?}", e),
+    // }
     Ok(0)
 }
 
