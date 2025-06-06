@@ -1,196 +1,133 @@
-use rusqlite::{ Connection };
-use std::fs::File;
-use std::collections::BinaryHeap;
-use std::cmp::Ordering;
-use std::io::{ self, BufRead, BufReader, Write };
-use std::fmt::{ self, Display, Formatter};
+use rusqlite;
+use std::collections::HashMap;
+use std::collections::HashSet;
 
-// # [derive(Eq, PartialEq, Debug)]
-// struct MinHeapNode<T>(T);
-# [derive(Eq, PartialEq, Debug)]
-struct MinHeapNode<T>(T);
+type RSqlConn = rusqlite::Connection;
 
-impl <T:Ord> Ord for MinHeapNode<T> {
-    fn cmp(&self, other:&Self) -> Ordering {
-        other.0.cmp(&self.0)
+fn retrieve_neighs(bm:u32, conn:&RSqlConn) -> rusqlite::Result<Vec<u32>> {
+    let mut stmt = conn.prepare("select y from d_neighs where x = $1 order by y")?;
+    let neigh_iter = stmt.query_map([bm], |row| {
+        row.get::<_,u32>(0)
+    })?;
+    Ok(
+        neigh_iter.collect::<rusqlite::Result<Vec<u32>>>()?
+    )
+}
+
+fn retrieve_bitmasks(conn:&RSqlConn) -> rusqlite::Result<Vec<u32>> {
+    let mut stmt = conn.prepare("select bitmask from d_words")?;
+    let word_iter = stmt.query_map([], |row| {
+        row.get::<_,u32>(0)
+    })?;
+    Ok(
+        word_iter.collect::<rusqlite::Result<Vec<u32>>>()?
+    )
+}
+
+fn retrieve_word(mem:u32, conn:&RSqlConn) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare("select word from d_words where word = $1")?;
+    let word_iter = stmt.query_map([mem], |row| {
+        row.get::<_,String>(0)
+    })?;
+    Ok(
+        word_iter.collect::<rusqlite::Result<Vec<String>>>()?
+    )
+}
+
+fn find_collections(conn:&RSqlConn) {
+    let results = search_backtrack(&conn);
+
+    println!("Found the following");
+    for f in results {
+        println!("-------------------");
+        for m in f {
+            let w = retrieve_word(m, conn);
+            println!("[{:?}]", w);
+        }
+        println!("-------------------");
     }
+    println!("Done!");
 }
 
+fn search_backtrack(conn:&RSqlConn) -> Vec<Vec<u32>> {
+    let mut found:Vec<Vec<u32>> = vec![];
+    let words = retrieve_bitmasks(&conn).unwrap();
+    // let mut neigh_map: HashMap<u32, Vec<u32>> = HashMap::new();
+    let mut neigh_map: HashMap<u32, HashSet<u32>> = HashMap::new();
 
-impl <T:Ord> PartialOrd for MinHeapNode<T> {
-    fn partial_cmp(&self, other:&Self) -> Option<Ordering> {
-        Some(self.cmp(other))
+    for b in &words {
+        // let neighs = retrieve_neighs(*b, conn).unwrap();
+        let neighs = retrieve_neighs(*b, conn).unwrap().into_iter().collect::<HashSet<_>>();
+        neigh_map.insert(*b, neighs);
     }
-}
-
-impl <T:Display> Display for MinHeapNode<T> {
-    fn fmt(&self, f:&mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+    for b in words {
+        println!("Searching {:?}", b);
+        let mut available = neigh_map[&b].clone();
+        backtrack(
+            b,
+            &mut vec![b],
+            &mut found, 
+            &mut available,
+            &neigh_map,
+        )
     }
+    found
 }
 
-#[derive(Eq, PartialEq, Debug)]
-struct WordHeapNode<T> {
-    bitmask:T,
-    word:String,
-}
-
-impl <T:Ord> Ord for WordHeapNode<T> {
-    fn cmp(&self, other:&Self) -> Ordering {
-        other.bitmask.cmp(&self.bitmask)
+fn backtrack(
+    curr:u32,
+    members:&mut Vec<u32>,
+    found:&mut Vec<Vec<u32>>,
+    // available:&mut Vec<u32>,
+    available:&mut HashSet<u32>,
+    // neigh_map: &HashMap<u32, Vec<u32>>
+    neigh_map: &HashMap<u32, HashSet<u32>>
+) {
+    if members.len() == 5 {
+        found.push(members.to_vec());
+        return;
     }
-}
-
-impl <T:Ord> PartialOrd for WordHeapNode<T> {
-    fn partial_cmp(&self, other:&Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl <T:Display> Display for WordHeapNode<T> {
-    fn fmt(&self, f:&mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.bitmask)
-    }
-}
-
-pub fn load_word_database() -> io::Result<()> {
-    let file = File::open("words/five.txt")?;
-    let connection = rusqlite::Connection::open("dev.db").unwrap();
-    let mut dictionary:BinaryHeap<WordHeapNode<u32>> = BinaryHeap::new();
-    let reader = BufReader::new(file);
-    for line in reader.lines() {
-        let word = line?;
-        if word.len() != 5 { continue; }
-        if let Some(bitmask) =  convert(&word) {
-            dictionary.push(WordHeapNode { bitmask, word } );
+    for n in &neigh_map[&curr] {
+        if n & curr == 0 {
+            members.push(*n);
+            // let mut intersection = sort_intersect(available, &neigh_map[&n]);
+            let mut intersection = available.intersection(&neigh_map[&n]).cloned().collect::<HashSet<u32>>();
+            backtrack(
+                *n, 
+                members,
+                found,
+                &mut intersection,
+               &neigh_map, 
+            );
+            members.pop();
         }
     }
-
-    let create_query = " create table d_words (bitmask INTEGER, word TEXT PRIMARY_KEY); ";
-    let mut insert_query = String::from(" insert into d_words values");
-    let create_index = "create index idx_bitmask on d_words(bitmask); ";
-
-    match connection.execute(create_query, ()) {
-        Ok(tcreate) => println!("Successfully created db {:?}",tcreate),
-        Err(e) => println!("Error cannot create db {:?}", e),
-    }
-    while let Some(node) = dictionary.pop() {
-        let vals = format!("({}, '{}'),", node.bitmask, &node.word);
-        insert_query.push_str(&vals);
-
-    }
-    insert_query.pop();
-    insert_query.push_str(";");
-    match connection.execute( &insert_query[0..insert_query.len()-1], () ){
-        Ok(_) => println!("!! DimWords successfully created table inserted all words"),
-        Err(e) => println!("DimWords failed with error {:?}", e),
-    }
-    match connection.execute(create_index, ()) {
-        Ok(tcreate) => println!("Successfully created index {:?}", tcreate),
-        Err(e) => println!("Error for index {:?}", e),
-    }
-    // println!("{:?}", insert_query);
-    Ok(())
 }
 
-pub fn load_word_neighbors() -> io::Result<usize> {
-    let connection = rusqlite::Connection::open("dev.db").unwrap();
-    let file = File::open("words/bits.bm")?;
-    let bitmasks: Vec<u32> = BufReader::new(file)
-        .lines()
-        .filter_map(Result::ok)
-        .filter_map(|line| line.trim().parse::<u32>().ok())
-        .collect()
-    ;
-    let create_query = " create table d_neighs (x INTEGER, y INTEGER); ";
-    let mut insert_query = String::from(" insert into d_neighs values");
-
-    for i in 0..bitmasks.len() {
-        for j in 0..bitmasks.len() {
-            if bitmasks[i] & bitmasks[j] == 0 {
-                let vals = format!("({}, {}),", bitmasks[i], bitmasks[j]);
-                insert_query.push_str(&vals);
-            }
-        }
-    }
-    insert_query.pop();
-    insert_query.push_str(";");
-    
-    match connection.execute(create_query, ()) {
-        Ok(_) => println!("Successfully created neighbors"),
-        Err(e) => println!("Error for create neighbors {:?}", e),
-    };
-    match connection.execute(&insert_query, ()) {
-        Ok(_) => println!("Successfully created neighbors"),
-        Err(e) => println!("Error for create neighbors {:?}", e),
-    }
-    Ok(0)
-}
-
-
-pub fn process_word_bank() -> io::Result<usize> {
-    let mut word_count = 0;
-    let file = File::open("words/five.txt")?;
-    let reader = BufReader::new(file);
-
-    let mut dictionary:BinaryHeap<WordHeapNode<u32>> = BinaryHeap::new();
-    for line in reader.lines() {
-        let word = line?;
-        if word.len() != 5 { continue; }
-        if let Some(bitmask) =  convert(&word) {
-            dictionary.push(WordHeapNode { bitmask, word } );
-
-        }
-    }
-    let mut out = File::create("words/bits.bm")?;
-    let mut prev = 0;
-    while let Some(mask) = dictionary.pop() {
-        if mask.bitmask != prev {
-            word_count += 1;
-            writeln!(out, "{mask}")?;
-        }
-        prev = mask.bitmask
-    }
-    Ok(word_count)
-} 
-
-pub fn convert(s:&str) -> Option<u32> {
-    let mut bit_word = 0;
-    for b in s.bytes() {
-        let offset = b - b'a';
-        let b = 1<< offset;
-        if b & bit_word != 0 {
-            return None;
-        }
-        bit_word |= b;
-    }
-    Some(bit_word)
-}
-
+// fn sort_intersect(base:&Vec<u32>, other:&Vec<u32>) -> Vec<u32> {
+//     let mut i = 0;
+//     let mut j = 0;
+//     let mut inter = Vec::new();
+//     while i < base.len() && j < other.len(){
+//         let l = base[i];
+//         let r = other[j];
+//         if l == r {
+//             inter.push(base[i]);
+//             i+=1;
+//             j+=1;
+//         } else if l < r {
+//             i+=1;
+//         } else {
+//             j+=1;
+//         }
+//     }
+//     inter
+// }
 
 fn main() {
-    match process_word_bank() {
-        Ok(n) => {
-            println!("Success! Processed {} words", n);
-        },
-        Err(e) => {
-            println!("Error found {:?}", e);
-        }
-    }
-    match load_word_database() {
-        Ok(_) => {
-            println!("Success! Loaded all words");
-        },
-        Err(e) => {
-            println!("Error found {:?}", e);
-        }
-    }
-    match load_word_neighbors() {
-        Ok(_) => {
-            println!("Success! Loaded all words");
-        },
-        Err(e) => {
-            println!("Error found {:?}", e);
-        }
-    }
+    // use wordle::initialize;
+    // let _ = initialize::create_data();
+    let conn = RSqlConn::open("dev.db").unwrap();
+    _ = find_collections(&conn);
+
 }
