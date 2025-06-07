@@ -18,22 +18,6 @@ fn retrieve_neighs(conn:&RSqlConn) -> HashMap<u32, Vec<u32>> {
     map
 }
 
-fn retrieve_neighs_cached(
-    bm: u32,
-    pos: u32,
-    stmt: &mut rusqlite::Statement<'_>
-) -> rusqlite::Result<Vec<u32>> {
-    let neigh_iter = stmt.query_map([bm, pos], |row| row.get(0))?;
-    neigh_iter.collect()
-}
-
-fn filter_neighs(
-    bm:u32,
-    neighs: &HashMap<u32, Vec<u32>>
-) -> &Vec<u32> {
-    &neighs[&bm]
-}
-
 fn retrieve_bitmasks(conn:&RSqlConn) -> rusqlite::Result<Vec<u32>> {
     let mut stmt = conn.prepare("select distinct bitmask from d_words")?;
     let word_iter = stmt.query_map([], |row| {
@@ -70,13 +54,9 @@ fn find_collections(conn:&RSqlConn) {
 }
 
 
-// fn search_backtrack(conn: &RSqlConn) -> Vec<Vec<u32>> {
 fn search_backtrack(conn: &RSqlConn) -> Vec<Vec<u32>> {
     let words = retrieve_bitmasks(&conn).unwrap();
     let neighs = retrieve_neighs(&conn);
-
-    // Clone needed because RSqlConn is not Sync — you could use Arc<Connection> if needed
-
     words.par_iter().enumerate().flat_map(|(pos, &b)| {
         let conn = RSqlConn::open("dev.db").unwrap();
         let pos = pos as u32;
@@ -127,7 +107,7 @@ fn backtrack(
         found.push(members.to_vec());
         return;
     }
-    for &n in filter_neighs(curr, neighs ) {
+    for &n in &neighs[&curr] {
         if n > curr && n & bm == 0 {
             members.push(n);
             backtrack(
