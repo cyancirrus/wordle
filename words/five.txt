@@ -2048,6 +2048,7 @@ sheaf
 moles
 lapse
 tawny
+vibex
 vexed
 autos
 wager
@@ -2776,6 +2777,7 @@ slush
 moron
 voile
 woken
+gucks
 fjord
 sheik
 jests
@@ -5755,3 +5757,4 @@ roble
 rumba
 biffy
 pupal
+faqir
