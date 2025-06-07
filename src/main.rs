@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+use rayon::prelude::*;
 use rusqlite;
 use std::time::Instant;
 use std::collections::HashMap;
@@ -68,26 +69,50 @@ fn find_collections(conn:&RSqlConn) {
     println!("Done!");
 }
 
-fn search_backtrack(conn:&RSqlConn) -> Vec<Vec<u32>> {
-    let mut found:Vec<Vec<u32>> = vec![];
-    let words = retrieve_bitmasks(&conn).unwrap();
-    let neighs =  retrieve_neighs(&conn);
-    for (pos, &b) in words.iter().enumerate() {
 
+// fn search_backtrack(conn: &RSqlConn) -> Vec<Vec<u32>> {
+fn search_backtrack(conn: &RSqlConn) -> Vec<Vec<u32>> {
+    let words = retrieve_bitmasks(&conn).unwrap();
+    let neighs = retrieve_neighs(&conn);
+
+    // Clone needed because RSqlConn is not Sync — you could use Arc<Connection> if needed
+
+    words.par_iter().enumerate().flat_map(|(pos, &b)| {
+        let conn = RSqlConn::open("dev.db").unwrap();
         let pos = pos as u32;
+        let mut local_found = vec![];
         backtrack(
             pos,
             b,
             b,
             &mut vec![b],
-            &mut found, 
+            &mut local_found,
             &neighs,
-            // &mut available,
-            conn,
-        )
-    }
-    found
+            &conn,
+        );
+        local_found
+    }).collect()
 }
+
+
+// fn search_backtrack(conn:&RSqlConn) -> Vec<Vec<u32>> {
+//     let mut found:Vec<Vec<u32>> = vec![];
+//     let words = retrieve_bitmasks(&conn).unwrap();
+//     let neighs =  retrieve_neighs(&conn);
+//     for (pos, &b) in words.iter().enumerate() {
+//         let pos = pos as u32;
+//         backtrack(
+//             pos,
+//             b,
+//             b,
+//             &mut vec![b],
+//             &mut found, 
+//             &neighs,
+//             conn,
+//         )
+//     }
+//     found
+// }
 
 fn backtrack(
     pos:u32,
